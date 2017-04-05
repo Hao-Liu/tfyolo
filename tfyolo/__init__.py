@@ -11,7 +11,49 @@ import numpy as np
 import tensorflow as tf
 import pylab as plt
 
-class Net(object):
+
+# http://www.pyimagesearch.com/2015/02/16/faster-non-maximum-suppression-python/
+# Malisiewicz et al.
+def do_nms(boxes, overlapThresh):
+    if len(boxes) == 0:
+	return boxes
+
+    pick = []
+
+    w = boxes[:,2]
+    h = boxes[:,3]
+    x1 = boxes[:,0] - w / 2.
+    y1 = boxes[:,1] - h / 2.
+    x2 = boxes[:,0] + w / 2.
+    y2 = boxes[:,1] + h / 2.
+
+    area = (w + 1) * (h + 1)
+    idxs = np.argsort(y2)
+
+    while len(idxs) > 0:
+	last = len(idxs) - 1
+	i = idxs[last]
+	pick.append(i)
+
+	xx1 = np.maximum(x1[i], x1[idxs[:last]])
+	yy1 = np.maximum(y1[i], y1[idxs[:last]])
+	xx2 = np.minimum(x2[i], x2[idxs[:last]])
+	yy2 = np.minimum(y2[i], y2[idxs[:last]])
+
+	w = np.maximum(0, xx2 - xx1 + 1)
+	h = np.maximum(0, yy2 - yy1 + 1)
+
+	overlap = (w * h) / area[idxs[:last]]
+
+	idxs = np.delete(
+                idxs,
+                np.concatenate(
+                    ([last], np.where(overlap > overlapThresh)[0])))
+
+    return boxes[pick]
+
+
+class YOLONet(object):
     def __init__(self, config_path, weight_path):
         self.classes = ['face']
         self.threshold = 0.2
@@ -63,19 +105,6 @@ class Net(object):
         return self.result
 
     def convert_detections(self, output, width, height):
-        #detection = np.reshape(output, (-1, self.grid_size, self.grid_size))
-        #idx = 0
-        #class_probs = detection[idx:idx+self.num_class]
-        #idx += self.num_class
-        #scales = detection[idx:idx+self.num_box]
-        #idx += self.num_box
-        #boxes = detection[idx:idx+self.num_box * 4]
-        #probs = np.expand_dims(scales, axis=1)
-        #print probs.shape
-        #print class_probs.shape
-        #print scales.shape
-        #print boxes.shape
-
         prob_range = [0, self.grid_size * self.grid_size * self.num_class]
         scales_range = [prob_range[1], prob_range[1] + self.grid_size * self.grid_size * self.num_box]
         boxes_range = [scales_range[1], scales_range[1] + self.grid_size * self.grid_size * self.num_box * 4]
@@ -111,27 +140,19 @@ class Net(object):
             for j in range(self.num_class):
                 probs[:,:,i,j] = np.multiply(class_probs[:,:,j],scales[:,:,i])
 
-        filter_mat_probs = np.array(probs>=self.threshold,dtype='bool')
+        filter_mat_probs = np.array(probs>=self.threshold, dtype='bool')
         filter_mat_boxes = np.nonzero(filter_mat_probs)
-        boxes_filtered = boxes[filter_mat_boxes[0],filter_mat_boxes[1],filter_mat_boxes[2]]
+        boxes_filtered = boxes[filter_mat_boxes[0], filter_mat_boxes[1], filter_mat_boxes[2]]
         probs_filtered = probs[filter_mat_probs]
-        classes_num_filtered = np.argmax(filter_mat_probs,axis=3)[filter_mat_boxes[0],filter_mat_boxes[1],filter_mat_boxes[2]]
+        classes_num_filtered = np.argmax(filter_mat_probs,axis=3)[filter_mat_boxes[0], filter_mat_boxes[1], filter_mat_boxes[2]]
 
         argsort = np.array(np.argsort(probs_filtered))[::-1]
         boxes_filtered = boxes_filtered[argsort]
         probs_filtered = probs_filtered[argsort]
         classes_num_filtered = classes_num_filtered[argsort]
 
-        for i in range(len(boxes_filtered)):
-            if probs_filtered[i] == 0:
-                continue
-                for j in range(i+1,len(boxes_filtered)):
-                    print i, j, self.iou(boxes_filtered[i],boxes_filtered[j])
-                    if self.iou(boxes_filtered[i],boxes_filtered[j]) > self.iou_threshold:
-                        probs_filtered[j] = 0.0
-
         filter_iou = np.array(probs_filtered>0.0, dtype='bool')
-        boxes_filtered = boxes_filtered[filter_iou]
+        boxes_filtered = do_nms(boxes_filtered[filter_iou], 0.5)
         probs_filtered = probs_filtered[filter_iou]
         classes_num_filtered = classes_num_filtered[filter_iou]
 
@@ -260,21 +281,3 @@ class Net(object):
                 self.num_class = int(section['classes'])
                 self.num_box = int(section['num'])
                 self.grid_size = int(section['side'])
-
-if __name__ == '__main__':
-    net = Net('yolo-face.cfg', 'yolo-face.weights')
-    cap = cv2.VideoCapture(0)
-    while True:
-        #img = cv2.imread('face.jpg')
-        res, img = cap.read()
-        result = net.test(img)
-        width, height, _ = img.shape
-        for cls, x, y, w, h, prob in result:
-            print cls, x, y, w, h, prob
-            x = int(x)
-            y = int(y)
-            w = int(w)
-            h = int(h)
-            cv2.rectangle(img, (x-w/2, y-h/2), (x+w/2, y+h/2), (255,255,255), 3)
-        cv2.imshow('image', img)
-        cv2.waitKey(1)
