@@ -92,8 +92,8 @@ class YOLONet(object):
     def test(self, img):
         start = time.time()
         height, width, _ = img.shape
-        img = cv2.resize(img, (448, 448))
-        img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (self.input_height, self.input_width))
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         # TODO: fix by using actual average subtraction
         inputs = np.expand_dims(img, axis=0) / 255.0 * 2.0 - 1.0
         net_output, = self.sess.run(
@@ -207,8 +207,8 @@ class YOLONet(object):
         self.pointer += 16
         for idx, section in enumerate(self.sections):
             if section['type'] == 'net':
-                self.height = int(section['height'])
-                self.width = int(section['width'])
+                self.input_height = self.height = int(section['height'])
+                self.input_width = self.width = int(section['width'])
                 self.channels = int(section['channels'])
                 self.inputs = self.net = tf.placeholder(
                         'float32',
@@ -218,32 +218,26 @@ class YOLONet(object):
                 size = int(section['size'])
                 filters = int(section['filters'])
                 stride = int(section['stride'])
-                change = pad * 2 - size + 1
-                if change == 0:
-                    padding = 'SAME'
-                else:
-                    raise Exception("Unhandled padding. (pad:%d size:%d)" %
-                            (pad, size))
                 bias, weight = self.load_conv(filters, size)
                 bias, weight = tf.Variable(bias), tf.Variable(weight)
+                padded = tf.pad(self.net, [[0, 0], [pad, pad], [pad, pad], [0, 0]])
 		conv = tf.nn.conv2d(
-                        self.net,
+                        padded,
                         weight,
                         strides=[1, stride, stride, 1],
-                        padding=padding)
+                        padding='VALID')
                 conv_biased = tf.add(conv, bias)
                 # TODO: fix memory issue
                 # https://github.com/tensorflow/tensorflow/issues/4079
 		self.net = tf.maximum(
                         0.1 * conv_biased,
                         conv_biased, name='conv_%s' % idx)
-                # TODO: deal with stride
+                change = pad * 2 - size + 1
                 self.width = self.width + change
                 self.height = self.height + change
                 self.channels = int(section['filters'])
             elif section['type'] == 'maxpool':
                 size = int(section['size'])
-                # TODO: deal with stride
                 stride = int(section['stride'])
                 self.width /= size
                 self.height /= size
